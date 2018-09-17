@@ -108,25 +108,40 @@ void parsePacket(const u_char* packet, const int size)
         inet_ntop(AF_INET, &(ipHeader->ip_dst), destIP, INET_ADDRSTRLEN);
         printf("IP:  Version = %d\n"
                 "IP:  Header length = %d bytes\n"
-                "IP:  Type of service = %x\n"
+                "IP:  Type of service = 0x%02x\n"
+                "IP:     xxx. .... = %d (precedence)\n"
+                "IP:     ...%c .... = normal delay\n"
+                "IP:     .... %c... = normal throughput\n"
+                "IP:     .... .%c.. = normal reliability\n"
                 "IP:  Total length = %d octets\n"
                 "IP:  Identification = %d\n"
+                "IP:  Flags = 0x%02x%02x\n"
+                "IP:    .%c.. .... = do not fragment\n"
+                "IP:    ..%c. .... = last fragment\n"
                 "IP:  Fragment offset = %d\n"
                 "IP:  Time to live = %d seconds/hops\n"
                 "IP:  Protocol = %d\n"
                 "IP:  Header checksum = %d\n"
                 "IP:  Source address = %s\n"
-                "IP:  Destination address = %s\n",
+                "IP:  Destination address = %s\n"
+                "IP:  %s options\n",
                ipHeader->ip_v & 0x0F,
                ipHeader->ip_hl & 0x0F,
                ipHeader->ip_tos,
+               packet[15] >> 5,
+               (packet[15] & 0x10 ? '1' : '0'),
+               (packet[15] & 0x08 ? '1' : '0'),
+               (packet[15] & 0x04 ? '1' : '0'),
                ntohs(ipHeader->ip_len),
                ipHeader->ip_id,
+               packet[20],packet[21],
+               (packet[20] & 0x40 ? '1' : '0'), (packet[20] & 0x20 ? '1' : '0'),
                ipHeader->ip_off,
                ipHeader->ip_ttl,
                ipHeader->ip_p,
                ipHeader->ip_sum,
-               sourceIP, destIP);
+               sourceIP, destIP,
+               (ipHeader->ip_hl == 20? "No" : "Has"));
         fflush(stdout);
 
         /*print data*/
@@ -144,8 +159,8 @@ void parsePacket(const u_char* packet, const int size)
                     }
                 }
                 /*print letters*/
-                int k = i - 16;
-                while (k < i && k < size) {
+                int k = (i+1) - 16 ;
+                while (k <= i && k < size) {
                     if (isprint(packet[k])) {
                         printf("%c", packet[k]);
                     } else {
