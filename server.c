@@ -95,7 +95,7 @@ void parsePacket(const u_char* packet, const int size)
     } else {
         strcpy(ether_type_str, "UNKNOWN");
     }
-    printf("ETHER: Packet size\t: %d bytes\nETHER: Destination\t: %s\nETHER: Source\t\t: %s\nETHER: Ethertype\t: 0%x (%s)\n",
+    printf("ETHER:   -----ETHER HEADER-----\nETHER: Packet size\t: %d bytes\nETHER: Destination\t: %s\nETHER: Source\t\t: %s\nETHER: Ethertype\t: 0%x (%s)\n",
            size,
            ether_ntoa_r((struct ether_addr *)&(ethernetHeader->ether_dhost), mac_dest),
            ether_ntoa_r((struct ether_addr *)&(ethernetHeader->ether_shost), mac_src),
@@ -106,7 +106,7 @@ void parsePacket(const u_char* packet, const int size)
         ipHeader = (struct ip*)(packet + sizeof(struct ether_header));
         inet_ntop(AF_INET, &(ipHeader->ip_src), sourceIP, INET_ADDRSTRLEN);
         inet_ntop(AF_INET, &(ipHeader->ip_dst), destIP, INET_ADDRSTRLEN);
-        printf("IP:  Version = %d\n"
+        printf("IP:   -----IP HEADER----_\nIP:  Version = %d\n"
                 "IP:  Header length = %d bytes\n"
                 "IP:  Type of service = 0x%02x\n"
                 "IP:     xxx. .... = %d (precedence)\n"
@@ -121,12 +121,12 @@ void parsePacket(const u_char* packet, const int size)
                 "IP:  Fragment offset = %d\n"
                 "IP:  Time to live = %d seconds/hops\n"
                 "IP:  Protocol = %d\n"
-                "IP:  Header checksum = %d\n"
+                "IP:  Header checksum = %x\n"
                 "IP:  Source address = %s\n"
                 "IP:  Destination address = %s\n"
                 "IP:  %s options\n",
                ipHeader->ip_v & 0x0F,
-               ipHeader->ip_hl & 0x0F,
+               (ipHeader->ip_hl & 0x0F) * 4,
                ipHeader->ip_tos,
                packet[15] >> 5,
                (packet[15] & 0x10 ? '1' : '0'),
@@ -141,13 +141,17 @@ void parsePacket(const u_char* packet, const int size)
                ipHeader->ip_p,
                ipHeader->ip_sum,
                sourceIP, destIP,
-               (ipHeader->ip_hl == 20? "No" : "Has"));
+               ((ipHeader->ip_hl & 0x0F) * 4  == 20? "No" : "Has"));
         fflush(stdout);
 
         /*print data*/
         int i = 0;
         char letters[16];
-        for (i = 0; i < size; i++) { 
+        for (i = 0; i < size; i++) {
+            /*print line number*/
+            if (i%16 == 0) {
+                 printf("%03d0  ", i / 16);
+            } 
             printf("%02x  ", packet[i]);
             if(((i+1)%16 == 0 && i != 0) || i == size-1) { 
                 /*add padding*/
@@ -171,5 +175,6 @@ void parsePacket(const u_char* packet, const int size)
                 printf("\n");
             }
         } 
+        printf("\n");
     }
 }
