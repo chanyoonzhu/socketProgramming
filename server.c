@@ -19,6 +19,11 @@
 #define BUFLEN 1024
 #define PORT 8080
 
+
+/*
+ * parser program reference: http://inst.eecs.berkeley.edu/~ee122/fa07/projects/p2files/packet_parser.c
+ *
+ */
 void parsePacket(const u_char * packet, const int size);
 
 int main(void)
@@ -32,7 +37,7 @@ int main(void)
      
     /*create socket*/
     if ((serverSock=socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1) {
-        perror("socket failed");
+        perror("socket failed\n");
     }
      
     memset(&serverAddr, 0, slen);
@@ -45,21 +50,17 @@ int main(void)
     
     /*socket binding*/ 
     if( bind(serverSock , (struct sockaddr*)&serverAddr, slen) < 0){
-        perror("binding failed");
+        perror("binding failed\n");
     }
      
     /*packet transfer*/
     while(1)
     {
-        printf("Waiting for data...");
-        fflush(stdout);
-      
         /*receive packet*/
         memset(buffer,'\0', BUFLEN);
         if ((recv_len = recvfrom(serverSock, buffer, BUFLEN, 0, (struct sockaddr *) &clientAddr, &slen)) == -1) {
-            perror("receiving failed");
+            perror("receiving failed\n");
         } else {
-            printf("Received packet from %s:%d\nReceived length: %d\n", inet_ntoa(clientAddr.sin_addr), ntohs(clientAddr.sin_port), recv_len);
             parsePacket(buffer, recv_len);
         }
     }
@@ -143,7 +144,7 @@ void parsePacket(const u_char* packet, const int size)
         } else { 
             strcpy(ip_protocol_str, "");
         }
-        printf("IP:   -----IP HEADER----_\nIP:  Version = %d\n"
+        printf("IP:   -----IP HEADER-----\nIP:  Version = %d\n"
                 "IP:  Header length = %d bytes\n"
                 "IP:  Type of service = 0x%02x\n"
                 "IP:     xxx. .... = %d (precedence)\n"
@@ -213,5 +214,7 @@ void parsePacket(const u_char* packet, const int size)
             }
         } 
         printf("\n");
+    } else {
+        printf("Not IP header\n\n");
     }
 }

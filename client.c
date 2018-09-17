@@ -60,24 +60,12 @@ int main(int argc, char **argv) {
         
         int i = 0;
 
-        /*send packet*/
-        /*for(i = 0;i < header.len;i++) { 
-            printf("%02x  ", packet[i]);
-            if (isprint(packet[i])) {
-                printf("%c", packet[i]);    
-            } else {
-                printf(".");
-            }
-            if((i%16 == 0 && i != 0) || i == header.len-1) { 
-                printf("\n"); 
-            }
-        }*/
         if (sendto(serverSock, packet, header.len, 
             MSG_CONFIRM, (const struct sockaddr *) &serverAddr,  
             slen) < 0) {
-            perror("send error");
+            perror("send error\n");
         } else {
-            printf("message sent: %d.\n", header.len);
+            printf("packet sent\n");
         } 
     }
 
