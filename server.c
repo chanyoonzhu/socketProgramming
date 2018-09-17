@@ -78,6 +78,12 @@ void parsePacket(const u_char* packet, const int size)
     u_char mac_dest[ETH_ALEN * 3],  mac_src[ETH_ALEN * 3];
     u_int16_t ether_type;
     char ether_type_str[10];
+    char ether_address_type;
+    char ether_saddress_glb[20];
+    char ether_saddress_grp[20];
+    char ether_daddress_glb[20];
+    char ether_daddress_grp[20];
+    char ip_protocol_str[5];
     char sourceIP[INET_ADDRSTRLEN];
     char destIP[INET_ADDRSTRLEN];
     u_int sourcePort, destPort;
@@ -95,10 +101,34 @@ void parsePacket(const u_char* packet, const int size)
     } else {
         strcpy(ether_type_str, "UNKNOWN");
     }
-    printf("ETHER:   -----ETHER HEADER-----\nETHER: Packet size\t: %d bytes\nETHER: Destination\t: %s\nETHER: Source\t\t: %s\nETHER: Ethertype\t: 0%x (%s)\n",
+    /*source address type*/
+    if (packet[0] & 0x02) {
+        strcpy(ether_daddress_glb, "Local");
+    } else {
+        strcpy(ether_daddress_glb, "Global");
+    }
+    if (packet[0] & 0x01) {
+        strcpy(ether_daddress_grp, "Group");
+    } else {
+        strcpy(ether_daddress_grp, "Individual");
+    }
+    /*dest address type*/
+    if (packet[6] & 0x02) {
+        strcpy(ether_saddress_glb, "Local");
+    } else {
+        strcpy(ether_saddress_glb, "Global");
+    }
+    if (packet[6] & 0x01) {
+        strcpy(ether_saddress_grp, "Group");
+    } else {
+        strcpy(ether_saddress_grp, "Individual");
+    }
+    printf("ETHER:   -----ETHER HEADER-----\nETHER: Packet size\t: %d bytes\nETHER: Destination\t: %s  Type: %s %s\nETHER: Source\t\t: %s  Type: %s %s\nETHER: Ethertype\t: 0%x (%s)\n",
            size,
            ether_ntoa_r((struct ether_addr *)&(ethernetHeader->ether_dhost), mac_dest),
+           ether_daddress_grp, ether_daddress_glb,
            ether_ntoa_r((struct ether_addr *)&(ethernetHeader->ether_shost), mac_src),
+           ether_saddress_grp, ether_daddress_glb,
            ether_type, ether_type_str);
     fflush(stdout);
     /*IP info*/
@@ -106,6 +136,13 @@ void parsePacket(const u_char* packet, const int size)
         ipHeader = (struct ip*)(packet + sizeof(struct ether_header));
         inet_ntop(AF_INET, &(ipHeader->ip_src), sourceIP, INET_ADDRSTRLEN);
         inet_ntop(AF_INET, &(ipHeader->ip_dst), destIP, INET_ADDRSTRLEN);
+        if (ipHeader->ip_p == 6) {
+            strcpy(ip_protocol_str, "TCP");
+        } else if (ipHeader->ip_p == 17) {
+            strcpy(ip_protocol_str, "UDP");
+        } else { 
+            strcpy(ip_protocol_str, "");
+        }
         printf("IP:   -----IP HEADER----_\nIP:  Version = %d\n"
                 "IP:  Header length = %d bytes\n"
                 "IP:  Type of service = 0x%02x\n"
@@ -120,7 +157,7 @@ void parsePacket(const u_char* packet, const int size)
                 "IP:    ..%c. .... = last fragment\n"
                 "IP:  Fragment offset = %d\n"
                 "IP:  Time to live = %d seconds/hops\n"
-                "IP:  Protocol = %d\n"
+                "IP:  Protocol = %d (%s)\n"
                 "IP:  Header checksum = %x\n"
                 "IP:  Source address = %s\n"
                 "IP:  Destination address = %s\n"
@@ -138,7 +175,7 @@ void parsePacket(const u_char* packet, const int size)
                (packet[20] & 0x40 ? '1' : '0'), (packet[20] & 0x20 ? '1' : '0'),
                ipHeader->ip_off,
                ipHeader->ip_ttl,
-               ipHeader->ip_p,
+               ipHeader->ip_p, ip_protocol_str,
                ipHeader->ip_sum,
                sourceIP, destIP,
                ((ipHeader->ip_hl & 0x0F) * 4  == 20? "No" : "Has"));
