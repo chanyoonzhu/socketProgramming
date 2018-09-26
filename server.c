@@ -88,6 +88,7 @@ void parsePacket(const u_char* packet, const int size)
     char sourceIP[INET_ADDRSTRLEN];
     char destIP[INET_ADDRSTRLEN];
     u_int sourcePort, destPort;
+    u_char tos;
     u_char *data;
     int dataLength = 0;
     int i;
@@ -144,6 +145,7 @@ void parsePacket(const u_char* packet, const int size)
         } else { 
             strcpy(ip_protocol_str, "");
         }
+        tos = ipHeader->ip_tos;
         printf("IP:   -----IP HEADER-----\nIP:  Version = %d\n"
                 "IP:  Header length = %d bytes\n"
                 "IP:  Type of service = 0x%02x\n"
@@ -165,19 +167,19 @@ void parsePacket(const u_char* packet, const int size)
                 "IP:  %s options\n",
                ipHeader->ip_v & 0x0F,
                (ipHeader->ip_hl & 0x0F) * 4,
-               ipHeader->ip_tos,
+               tos,
                packet[15] >> 5,
-               (packet[15] & 0x10 ? '1' : '0'),
-               (packet[15] & 0x08 ? '1' : '0'),
-               (packet[15] & 0x04 ? '1' : '0'),
+               (tos == IPTOS_LOWDELAY? '1' : '0'),
+               (tos == IPTOS_THROUGHPUT? '1' : '0'),
+               (tos == IPTOS_RELIABILITY? '1' : '0'),
                ntohs(ipHeader->ip_len),
-               ipHeader->ip_id,
+               ntohs(ipHeader->ip_id),
                packet[20],packet[21],
                (packet[20] & 0x40 ? '1' : '0'), (packet[20] & 0x20 ? '1' : '0'),
                ipHeader->ip_off,
                ipHeader->ip_ttl,
                ipHeader->ip_p, ip_protocol_str,
-               ipHeader->ip_sum,
+               ntohs(ipHeader->ip_sum),
                sourceIP, destIP,
                ((ipHeader->ip_hl & 0x0F) * 4  == 20? "No" : "Has"));
         fflush(stdout);
