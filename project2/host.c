@@ -17,7 +17,6 @@
 #include <arpa/inet.h>
 #include <pcap.h>
 
-#define CLIENTPORT     4767 
 #define BUFLEN 1024 
 
 struct host {
@@ -235,8 +234,9 @@ void *createServer(void * arg)
 
 void parsePacket(const u_char* packet, const int size, const unsigned long machine_ip)
 {
+
+    #define WLANTYPE_IP 0x0800    
     
-    struct ether_header* ethernetHeader;
     struct wlan_header {
         u_short packet_type;
 	u_short addr_type;
@@ -245,91 +245,52 @@ void parsePacket(const u_char* packet, const int size, const unsigned long machi
         u_char unused[2];
         u_short protocol; 
     };
-    const u_char *bssid;
-    const u_char *essid;
-    const u_char *essidLen;
-    const u_char *channel;
-    const u_char *rssi;
 
     const struct wlan_header* wlanHeader;
     const struct ip* ipHeader;
     const struct tcphdr* tcpHeader;
     const struct udphdr* udpHeader;
     u_char mac_dest[ETH_ALEN * 3],  mac_src[ETH_ALEN * 3];
-    u_int16_t ether_type;
-    char ether_type_str[10];
-    char ether_address_type;
-    char ether_saddress_glb[20];
-    char ether_saddress_grp[20];
-    char ether_daddress_glb[20];
-    char ether_daddress_grp[20];
     char ip_protocol_str[5];
     char sourceIP[INET_ADDRSTRLEN];
     char destIP[INET_ADDRSTRLEN];
+    char sourceWLAN[6];
     u_int sourcePort, destPort;
     u_char tos;
     u_char *data;
     int dataLength = 0;
     int i;
 
-    /*get Ethernet Info*/
+    /*get wlan Info*/
     wlanHeader = (struct wlan_header*)packet;
-    /*ethernetHeader = (struct ether_header*)packet;
-    ether_type = ntohs(ethernetHeader->ether_type);
-    if (ether_type == ETHERTYPE_IP) {
-        strcpy(ether_type_str, "IP");
-    } else if (ether_type == ETHERTYPE_ARP){
-        strcpy(ether_type_str, "ARP");
-    } else {
-        strcpy(ether_type_str, "UNKNOWN");
-    }
-    /*source address type*/
-    /*if (packet[0] & 0x02) {
-        strcpy(ether_daddress_glb, "Local");
-    } else {
-        strcpy(ether_daddress_glb, "Global");
-    }
-    if (packet[0] & 0x01) {
-        strcpy(ether_daddress_grp, "Group");
-    } else {
-        strcpy(ether_daddress_grp, "Individual");
-    }
-    /*dest address type*/
-    /*if (packet[6] & 0x02) {
-        strcpy(ether_saddress_glb, "Local");
-    } else {
-        strcpy(ether_saddress_glb, "Global");
-    }
-    if (packet[6] & 0x01) {
-        strcpy(ether_saddress_grp, "Group");
-    } else {
-        strcpy(ether_saddress_grp, "Individual");
-    }
-        /*IP info*/
-    if (1) {
+    /*IP info*/
+    printf("header protocol: %hu	const: %hu\n", wlanHeader->protocol, WLANTYPE_IP);
+    if (htons(wlanHeader->protocol) == WLANTYPE_IP) {
         ipHeader = (struct ip*)(packet + sizeof(struct wlan_header));
-        //ipHeader = (struct ip*)(packet + sizeof(struct ether_header));
         printf("dest ip address: %d\n", ipHeader->ip_dst.s_addr);
         printf("machine ip address %ld\n", machine_ip);
         if (ipHeader->ip_dst.s_addr == machine_ip) {
             inet_ntop(AF_INET, &(ipHeader->ip_src), sourceIP, INET_ADDRSTRLEN);
             inet_ntop(AF_INET, &(ipHeader->ip_dst), destIP, INET_ADDRSTRLEN);
+            inet_ntop(AF_INET, &(wlanHeader->addr_src), sourceWLAN, 6);
             if (ipHeader->ip_p == 6) {
                 strcpy(ip_protocol_str, "TCP");
             } else if (ipHeader->ip_p == 17) {
                 strcpy(ip_protocol_str, "UDP");
+            } else if (ipHeader->ip_p == 1) {
+                strcpy(ip_protocol_str, "ICMP");
             } else { 
                 strcpy(ip_protocol_str, "");
             }
             tos = ipHeader->ip_tos;
-            /*printf("ETHER:   -----ETHER HEADER-----\nETHER: Packet size\t: %d bytes\nETHER: Destination\t: %s  Type: %s %s\nETHER: Source\t\t: %s  Type: %s %s\nETHER: Ethertype\t: 0%x (%s)\n",
-               size,
-               ether_ntoa_r((struct ether_addr *)&(ethernetHeader->ether_dhost), mac_dest),
-               ether_daddress_grp, ether_daddress_glb,
-               ether_ntoa_r((struct ether_addr *)&(ethernetHeader->ether_shost), mac_src),
-               ether_saddress_grp, ether_daddress_glb,
-               ether_type, ether_type_str);
-            fflush(stdout);*/
+            printf("WLAN:   -----WLAN HEADER-----\nWLAN: Packet type\t: %hu \nWLAN: Link-layer address type\t: %hu\nWLAN:  Link-layer address length: %hu\nWLAN: Source\t\t: %s\nWLAN:  Unused: %02x%02x\nWLAN: protocol\t: %04x (%s)\n",
+               ntohs(wlanHeader->packet_type),
+               ntohs(wlanHeader->addr_type),
+               ntohs(wlanHeader->addr_length),
+               sourceWLAN,
+               ntohs(wlanHeader->unused),
+               ntohs(wlanHeader->protocol));
+            fflush(stdout);
             printf("IP:   -----IP HEADER-----\nIP:  Version = %d\n"
                    "IP:  Header length = %d bytes\n"
                    "IP:  Type of service = 0x%02x\n"
@@ -345,21 +306,21 @@ void parsePacket(const u_char* packet, const int size, const unsigned long machi
                    "IP:  Fragment offset = %d\n"
                    "IP:  Time to live = %d seconds/hops\n"
                    "IP:  Protocol = %d (%s)\n"
-                   "IP:  Header checksum = %x\n"
+                   "IP:  Header checksum = 0x%x\n"
                    "IP:  Source address = %s\n"
                    "IP:  Destination address = %s\n"
                    "IP:  %s options\n",
                    ipHeader->ip_v & 0x0F,
                    (ipHeader->ip_hl & 0x0F) * 4,
                    tos,
-                   packet[15] >> 5,
+                   tos >> 13,
                    (tos == IPTOS_LOWDELAY? '1' : '0'),
                    (tos == IPTOS_THROUGHPUT? '1' : '0'),
                    (tos == IPTOS_RELIABILITY? '1' : '0'),
                    ntohs(ipHeader->ip_len),
                    ntohs(ipHeader->ip_id),
-                   packet[20],packet[21],
-                   (packet[20] & 0x40 ? '1' : '0'), (packet[20] & 0x20 ? '1' : '0'),
+                   ((u_char*)ipHeader)[6],((u_char*)ipHeader)[7],
+                   (((u_char*)ipHeader)[6] & 0x40 ? '1' : '0'), (((u_char*)ipHeader)[6] & 0x20 ? '1' : '0'),
                    ipHeader->ip_off,
                    ipHeader->ip_ttl,
                    ipHeader->ip_p, ip_protocol_str,
