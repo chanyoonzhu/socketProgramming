@@ -18,7 +18,8 @@
 #include <pcap.h>
 
 #define BUFLEN 1024 
-
+#define WLANTYPE_IP 0x0800
+    
 struct host {
     short port;
     long ip_address;
@@ -28,11 +29,25 @@ struct host {
     struct host** neighbors;
 };
 
+struct socket {
+    long src_address;
+    struct host* neighbor;
+};
+
+struct wlan_header {
+    u_short packet_type;
+    u_short addr_type;
+    u_short addr_length;
+    u_char addr_src[6];
+    u_char unused[2];
+    u_short protocol; 
+};
+
 void readConfigFile (char* filename, struct host* machine);
 void *createClient(void * arg);
 void *createServer(void * arg);
-void *createClientSocket(void * arg);
 void parsePacket(const u_char* packet, const int size, const unsigned long machine_ip);
+int *createClientSocket(void * arg);
 
 int main(int argc, char **argv) { 
     
@@ -52,13 +67,18 @@ int main(int argc, char **argv) {
         exit(EXIT_FAILURE);
     }
     
+    /* get packet file name */
     strcpy(machine->packet_file, argv[2]);
 
+    /* read from config file */
     readConfigFile(argv[1], machine);
 
+    /* create client thread */
     status = pthread_create(&threads[0], NULL, createClient, machine);
+    /* create server thread */
     status = pthread_create(&threads[1], NULL, createServer, machine);
 
+    /* join threads */
     status = pthread_join(threads[0], &exit_value);
     status = pthread_join(threads[1], &exit_value);
     
@@ -95,13 +115,14 @@ void readConfigFile (char* filename, struct host* machine)
         (*neighborptr)->ip_address = inet_addr(buffer);
         (*neighborptr)->real_ip = inet_addr(ip);
         strcpy((*neighborptr)->packet_file, machine->packet_file);
-        printf("neighbor info: %ld %ld %hu\n", (*neighborptr)->ip_address, (*neighborptr)->real_ip, (*neighborptr)->port);
+        printf("neighbor info: %s %s %hu\n", buffer, ip, (*neighborptr)->port);
         neighborptr++;
     }
 }
 
-void *createClientSocket(void * arg)
+int *createClientSocket(void * arg)
 {
+    struct socket* sock;
     struct host* machine;
     pcap_t *pp;
     char errbuf[PCAP_ERRBUF_SIZE];
@@ -110,10 +131,12 @@ void *createClientSocket(void * arg)
     struct sockaddr_in serverAddr; 
     struct pcap_pkthdr header;
     int serverSock;
-    socklen_t slen = sizeof(serverAddr);
- 
-    machine = (struct host*) arg;
-    
+    socklen_t slen = sizeof(serverAddr); 
+    sock = (struct socket*) arg;
+    machine = sock->neighbor;
+    const struct ip* ipHeader;
+    struct timeval tv;
+
     /*socket creation*/
     if ((serverSock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) { 
         perror("socket failed"); 
@@ -127,40 +150,65 @@ void *createClientSocket(void * arg)
     serverAddr.sin_addr.s_addr = machine->real_ip; 
     serverAddr.sin_port = htons(machine->port); 
 
-    /*open pcap file*/
-    pp = pcap_open_offline(machine->packet_file, errbuf);
-    if (pp == NULL) {
-        fprintf(stderr, "\npcap_open_offline() failed: %s\n", errbuf);
-        return 0;
-    }
+    /* set timeout */
+    tv.tv_sec = 5;
+    tv.tv_usec = 0;
+    setsockopt(serverSock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-    while ((packet = pcap_next(pp, &header)) != NULL) {
+    while (1) {
         
-        int i = 0;
+        /*open pcap file*/
+        pp = pcap_open_offline(machine->packet_file, errbuf);
+        if (pp == NULL) {
+            fprintf(stderr, "\npcap_open_offline() failed: %s\n", errbuf);
+            return 0;
+        }
 
-        if (sendto(serverSock, packet, header.len, 
-            MSG_CONFIRM, (const struct sockaddr *) &serverAddr,  
-            slen) < 0) {
-            perror("send error\n");
-        } else {
-            printf("packet sent\n");
-        } 
+
+        /* send packets to the server*/
+        while ((packet = pcap_next(pp, &header)) != NULL) {
+
+            int i = 0;
+
+            /* parse packet to find matching source*/
+            ipHeader = (struct ip*)(packet + sizeof(struct wlan_header));
+            if (ipHeader->ip_src.s_addr == sock->src_address) {
+                if (sendto(serverSock, packet, header.len,
+                    MSG_CONFIRM, (const struct sockaddr *) &serverAddr,
+                    slen) < 0) {
+                    perror("send error\n");
+                } 
+            }
+        }
+ 
+         /* get reply from the server and get out of the loop */
+        if(recvfrom(serverSock, buffer, sizeof(buffer), 0, (struct sockaddr *)&serverAddr, &slen) > 0) {
+            //printf("server received packets.\n");
+            break;
+        }
+
+        /* close pcap file */
+        //pcap_close(pp);
     }
 
+    /*clean memory*/
+    free(machine);
+    free(sock);
+    machine = NULL;
+    sock = NULL;
     close(serverSock);
 }
 
 void *createClient(void * arg)
 {
-     
+    
     pthread_t *threads;
     int status;
     void *exit_value; 
     struct host* machine;
-
     /*get info*/
     machine = (struct host *)arg;
-    
+
     threads = malloc(sizeof(pthread_t) * (machine->total_neighbors));
 
     if (threads == NULL) {
@@ -170,12 +218,16 @@ void *createClient(void * arg)
     
     /*create sockets for each neighbor*/
     for (int i = 0; i < machine->total_neighbors; i++) {
-        if (pthread_create(&threads[i], NULL, createClientSocket, machine->neighbors[i]) != 0) {
+	struct socket* sock = malloc(sizeof(struct socket));
+        sock->src_address = machine->ip_address;
+        sock->neighbor = machine->neighbors[i];
+        if (pthread_create(&threads[i], NULL, createClientSocket, sock) != 0) {
             printf("creating socket thread failed.\n");
             exit(EXIT_FAILURE);
         }
     }
 
+    /* join threads */
     for (int i = 0; i < machine->total_neighbors; i++) {
         if (pthread_join(threads[i], NULL) != 0) {
             printf("socket threads join failed.\n");
@@ -225,6 +277,10 @@ void *createServer(void * arg)
             perror("receiving failed\n");
         } else {
             parsePacket(buffer, recv_len, machine->ip_address);
+       	    /* acknowledge to client */
+            if (sendto(serverSock, buffer, slen, 0, (struct sockaddr *)&clientAddr, slen) < 0) {
+                printf("acknowledge failed.\n");
+            }
         }
     }
  
@@ -235,44 +291,26 @@ void *createServer(void * arg)
 void parsePacket(const u_char* packet, const int size, const unsigned long machine_ip)
 {
 
-    #define WLANTYPE_IP 0x0800    
-    
-    struct wlan_header {
-        u_short packet_type;
-	u_short addr_type;
-        u_short addr_length;
-        u_char addr_src[6];
-        u_char unused[2];
-        u_short protocol; 
-    };
-
     const struct wlan_header* wlanHeader;
     const struct ip* ipHeader;
-    const struct tcphdr* tcpHeader;
-    const struct udphdr* udpHeader;
-    u_char mac_dest[ETH_ALEN * 3],  mac_src[ETH_ALEN * 3];
     char ip_protocol_str[5];
+    char sourceWLAN[ETH_ALEN * 3];
     char sourceIP[INET_ADDRSTRLEN];
     char destIP[INET_ADDRSTRLEN];
-    char sourceWLAN[6];
-    u_int sourcePort, destPort;
     u_char tos;
     u_char *data;
-    int dataLength = 0;
     int i;
 
     /*get wlan Info*/
     wlanHeader = (struct wlan_header*)packet;
-    /*IP info*/
-    printf("header protocol: %hu	const: %hu\n", wlanHeader->protocol, WLANTYPE_IP);
     if (htons(wlanHeader->protocol) == WLANTYPE_IP) {
         ipHeader = (struct ip*)(packet + sizeof(struct wlan_header));
-        printf("dest ip address: %d\n", ipHeader->ip_dst.s_addr);
-        printf("machine ip address %ld\n", machine_ip);
         if (ipHeader->ip_dst.s_addr == machine_ip) {
-            inet_ntop(AF_INET, &(ipHeader->ip_src), sourceIP, INET_ADDRSTRLEN);
+            /* get source and dest ip addresses */
             inet_ntop(AF_INET, &(ipHeader->ip_dst), destIP, INET_ADDRSTRLEN);
-            inet_ntop(AF_INET, &(wlanHeader->addr_src), sourceWLAN, 6);
+            inet_ntop(AF_INET, &(ipHeader->ip_src), sourceIP, INET_ADDRSTRLEN);
+            ether_ntoa_r((struct ether_addr *)&(wlanHeader->addr_src), sourceWLAN);
+            /* get protocol */
             if (ipHeader->ip_p == 6) {
                 strcpy(ip_protocol_str, "TCP");
             } else if (ipHeader->ip_p == 17) {
@@ -283,14 +321,17 @@ void parsePacket(const u_char* packet, const int size, const unsigned long machi
                 strcpy(ip_protocol_str, "");
             }
             tos = ipHeader->ip_tos;
-            printf("WLAN:   -----WLAN HEADER-----\nWLAN: Packet type\t: %hu \nWLAN: Link-layer address type\t: %hu\nWLAN:  Link-layer address length: %hu\nWLAN: Source\t\t: %s\nWLAN:  Unused: %02x%02x\nWLAN: protocol\t: %04x (%s)\n",
+            /* wlan info*/
+            printf("WLAN:   -----WLAN HEADER-----\nWLAN: Packet type\t: %hu \nWLAN: Link-layer address type\t: %hu\nWLAN:  Link-layer address length: %hu\nWLAN: Source\t\t: %s\nWLAN:  Unused: %02hhx%02hhx\nWLAN: protocol\t: %04x (IPv%d)\n",
                ntohs(wlanHeader->packet_type),
                ntohs(wlanHeader->addr_type),
                ntohs(wlanHeader->addr_length),
                sourceWLAN,
-               ntohs(wlanHeader->unused),
-               ntohs(wlanHeader->protocol));
+               wlanHeader->unused[0] & 0xff, wlanHeader->unused[1] & 0xff,
+               ntohs(wlanHeader->protocol),
+               ipHeader->ip_v & 0x0f);
             fflush(stdout);
+            /* ip info */
             printf("IP:   -----IP HEADER-----\nIP:  Version = %d\n"
                    "IP:  Header length = %d bytes\n"
                    "IP:  Type of service = 0x%02x\n"
@@ -365,4 +406,4 @@ void parsePacket(const u_char* packet, const int size, const unsigned long machi
     } else {
         printf("Not IP header\n\n");
     }
-}
+}  
