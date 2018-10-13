@@ -322,7 +322,13 @@ void parsePacket(const u_char* packet, const int size, const unsigned long machi
             }
             tos = ipHeader->ip_tos;
             /* wlan info*/
-            printf("WLAN:   -----WLAN HEADER-----\nWLAN: Packet type\t: %hu \nWLAN: Link-layer address type\t: %hu\nWLAN:  Link-layer address length: %hu\nWLAN: Source\t\t: %s\nWLAN:  Unused: %02hhx%02hhx\nWLAN: protocol\t: %04x (IPv%d)\n",
+            printf("WLAN:   -----WLAN HEADER-----\n"
+                   "WLAN: Packet type: %hu \n"
+                   "WLAN: Link-layer address type: %hu\n"
+                   "WLAN: Link-layer address length: %hu\n"
+                   "WLAN: Source: %s\n"
+                   "WLAN: Unused: %02hhx%02hhx\n"
+                   "WLAN: protocol: %04x (IPv%d)\n",
                ntohs(wlanHeader->packet_type),
                ntohs(wlanHeader->addr_type),
                ntohs(wlanHeader->addr_length),
@@ -344,7 +350,7 @@ void parsePacket(const u_char* packet, const int size, const unsigned long machi
                    "IP:  Flags = 0x%02x%02x\n"
                    "IP:    .%c.. .... = do not fragment\n"
                    "IP:    ..%c. .... = last fragment\n"
-                   "IP:  Fragment offset = %d\n"
+                   "IP:  Fragment offset = %hu\n"
                    "IP:  Time to live = %d seconds/hops\n"
                    "IP:  Protocol = %d (%s)\n"
                    "IP:  Header checksum = 0x%x\n"
@@ -362,7 +368,8 @@ void parsePacket(const u_char* packet, const int size, const unsigned long machi
                    ntohs(ipHeader->ip_id),
                    ((u_char*)ipHeader)[6],((u_char*)ipHeader)[7],
                    (((u_char*)ipHeader)[6] & 0x40 ? '1' : '0'), (((u_char*)ipHeader)[6] & 0x20 ? '1' : '0'),
-                   ipHeader->ip_off,
+                   //ipHeader->ip_off,
+                   (((u_char*)ipHeader)[6] & 0x2f >> 8) | (((u_char*)ipHeader)[7] & 0xff),
                    ipHeader->ip_ttl,
                    ipHeader->ip_p, ip_protocol_str,
                    ntohs(ipHeader->ip_sum),
