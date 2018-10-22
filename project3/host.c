@@ -47,7 +47,7 @@ void readConfigFile (char* filename, struct host* machine);
 void *createClient(void * arg);
 void *createServer(void * arg);
 void parsePacket(const u_char* packet, const int size, const unsigned long machine_ip);
-int *createClientSocket(void * arg);
+void *createClientSocket(void * arg);
 
 int main(int argc, char **argv) { 
     
@@ -120,7 +120,7 @@ void readConfigFile (char* filename, struct host* machine)
     }
 }
 
-int *createClientSocket(void * arg)
+void *createClientSocket(void * arg)
 {
     struct socket* sock;
     struct host* machine;
