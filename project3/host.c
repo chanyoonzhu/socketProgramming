@@ -122,20 +122,30 @@ void readConfigFile (char* filename, struct host* machine)
 
 int *createClientSocket(void * arg)
 {
-    struct socket* sock;
+}
+
+void *createClient(void * arg)
+{
+    
     struct host* machine;
     pcap_t *pp;
     char errbuf[PCAP_ERRBUF_SIZE];
-    char buffer[BUFLEN]; 
     const unsigned char *packet;
     struct sockaddr_in serverAddr; 
     struct pcap_pkthdr header;
     int serverSock;
     socklen_t slen = sizeof(serverAddr); 
-    sock = (struct socket*) arg;
-    machine = sock->neighbor;
     const struct ip* ipHeader;
-    struct timeval tv;
+
+    /*get info*/
+    machine = (struct host *)arg;
+
+    /*open pcap file*/
+    pp = pcap_open_offline(machine->packet_file, errbuf);
+    if (pp == NULL) {
+        fprintf(stderr, "\npcap_open_offline() failed: %s\n", errbuf);
+        return 0;
+    }
 
     /*socket creation*/
     if ((serverSock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) { 
@@ -143,36 +153,26 @@ int *createClientSocket(void * arg)
         exit(EXIT_FAILURE); 
     }
 
-    memset(&serverAddr, 0, sizeof(serverAddr)); 
- 
-    /*address*/
-    serverAddr.sin_family = AF_INET; 
-    serverAddr.sin_addr.s_addr = machine->real_ip; 
-    serverAddr.sin_port = htons(machine->port); 
+    /* sleep before send incase server not set up*/
+    sleep(3);
 
-    /* set timeout */
-    tv.tv_sec = 5;
-    tv.tv_usec = 0;
-    setsockopt(serverSock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    while ((packet = pcap_next(pp, &header)) != NULL) {
 
-    while (1) {
+        int i = 0;
+
+        /* parse packet to find matching source*/
+        ipHeader = (struct ip*)(packet + sizeof(struct wlan_header));
+        if (ipHeader->ip_src.s_addr == machine->ip_address) {
+            /* send to each neighbor */
+            for (int i = 0; i < machine->total_neighbors; i++) {
         
-        /*open pcap file*/
-        pp = pcap_open_offline(machine->packet_file, errbuf);
-        if (pp == NULL) {
-            fprintf(stderr, "\npcap_open_offline() failed: %s\n", errbuf);
-            return 0;
-        }
+                memset(&serverAddr, 0, sizeof(serverAddr)); 
+ 
+                /*address*/
+                serverAddr.sin_family = AF_INET; 
+                serverAddr.sin_addr.s_addr = machine->neighbors[i]->real_ip; 
+                serverAddr.sin_port = htons(machine->neighbors[i]->port); 
 
-
-        /* send packets to the server*/
-        while ((packet = pcap_next(pp, &header)) != NULL) {
-
-            int i = 0;
-
-            /* parse packet to find matching source*/
-            ipHeader = (struct ip*)(packet + sizeof(struct wlan_header));
-            if (ipHeader->ip_src.s_addr == sock->src_address) {
                 if (sendto(serverSock, packet, header.len,
                     MSG_CONFIRM, (const struct sockaddr *) &serverAddr,
                     slen) < 0) {
@@ -180,60 +180,12 @@ int *createClientSocket(void * arg)
                 } 
             }
         }
- 
-         /* get reply from the server and get out of the loop */
-        if(recvfrom(serverSock, buffer, sizeof(buffer), 0, (struct sockaddr *)&serverAddr, &slen) > 0) {
-            //printf("server received packets.\n");
-            break;
-        }
-
-        /* close pcap file */
-        //pcap_close(pp);
     }
 
     /*clean memory*/
     free(machine);
-    free(sock);
     machine = NULL;
-    sock = NULL;
     close(serverSock);
-}
-
-void *createClient(void * arg)
-{
-    
-    pthread_t *threads;
-    int status;
-    void *exit_value; 
-    struct host* machine;
-    /*get info*/
-    machine = (struct host *)arg;
-
-    threads = malloc(sizeof(pthread_t) * (machine->total_neighbors));
-
-    if (threads == NULL) {
-        printf("out of memory\n");
-        exit(EXIT_FAILURE);
-    }
-    
-    /*create sockets for each neighbor*/
-    for (int i = 0; i < machine->total_neighbors; i++) {
-	struct socket* sock = malloc(sizeof(struct socket));
-        sock->src_address = machine->ip_address;
-        sock->neighbor = machine->neighbors[i];
-        if (pthread_create(&threads[i], NULL, createClientSocket, sock) != 0) {
-            printf("creating socket thread failed.\n");
-            exit(EXIT_FAILURE);
-        }
-    }
-
-    /* join threads */
-    for (int i = 0; i < machine->total_neighbors; i++) {
-        if (pthread_join(threads[i], NULL) != 0) {
-            printf("socket threads join failed.\n");
-            exit(EXIT_FAILURE);
-        }
-    }    
 }
 
 void *createServer(void * arg)
@@ -277,10 +229,6 @@ void *createServer(void * arg)
             perror("receiving failed\n");
         } else {
             parsePacket(buffer, recv_len, machine->ip_address);
-       	    /* acknowledge to client */
-            if (sendto(serverSock, buffer, slen, 0, (struct sockaddr *)&clientAddr, slen) < 0) {
-                printf("acknowledge failed.\n");
-            }
         }
     }
  
