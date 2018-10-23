@@ -27,6 +27,7 @@ struct host {
     int total_neighbors;
     char packet_file[BUFLEN];
     struct host** neighbors;
+    short source_port;
 };
 
 struct socket {
@@ -48,6 +49,8 @@ void *createClient(void * arg);
 void *createServer(void * arg);
 void parsePacket(const u_char* packet, const int size, const unsigned long machine_ip);
 void *createClientSocket(void * arg);
+long getPacketDestination(const u_char* packet);
+long getPacketSource(const u_char* packet);
 
 int main(int argc, char **argv) { 
     
@@ -118,6 +121,7 @@ void readConfigFile (char* filename, struct host* machine)
         printf("neighbor info: %s %s %hu\n", buffer, ip, (*neighborptr)->port);
         neighborptr++;
     }
+    machine->source_port = 0;
 }
 
 void *createClientSocket(void * arg)
@@ -204,12 +208,20 @@ void *createClient(void * arg)
     
     pthread_t *threads;
     int status;
+    int total_threads;
     void *exit_value; 
-    struct host* machine;
+    struct host* machine;    
+    char sourceIP[INET_ADDRSTRLEN];
+    char destIP[INET_ADDRSTRLEN];
+
     /*get info*/
     machine = (struct host *)arg;
 
-    threads = malloc(sizeof(pthread_t) * (machine->total_neighbors));
+    total_threads = machine->total_neighbors;
+    if (machine->source_port != 0) {
+        total_threads--;
+    }
+    threads = malloc(sizeof(pthread_t) * total_threads);
 
     if (threads == NULL) {
         printf("out of memory\n");
@@ -217,18 +229,26 @@ void *createClient(void * arg)
     }
     
     /*create sockets for each neighbor*/
+    int thread_idx = 0;
     for (int i = 0; i < machine->total_neighbors; i++) {
-	struct socket* sock = malloc(sizeof(struct socket));
-        sock->src_address = machine->ip_address;
-        sock->neighbor = machine->neighbors[i];
-        if (pthread_create(&threads[i], NULL, createClientSocket, sock) != 0) {
-            printf("creating socket thread failed.\n");
-            exit(EXIT_FAILURE);
+        /* do not send back where packets come from */
+        if (machine->source_port == 0 || machine->neighbors[i]->port != machine->source_port) {
+	    struct socket* sock = malloc(sizeof(struct socket));
+            sock->src_address = machine->ip_address;
+            sock->neighbor = machine->neighbors[i];
+            inet_ntop(AF_INET, &(sock->neighbor->ip_address), destIP, INET_ADDRSTRLEN);
+            inet_ntop(AF_INET, &(machine->ip_address), sourceIP, INET_ADDRSTRLEN);
+            printf("%s forwarding packets to %s\n", sourceIP, destIP);
+            if (pthread_create(&threads[thread_idx], NULL, createClientSocket, sock) != 0) {
+                printf("creating socket thread failed.\n");
+                exit(EXIT_FAILURE);
+            }
+            thread_idx++;
         }
     }
 
     /* join threads */
-    for (int i = 0; i < machine->total_neighbors; i++) {
+    for (int i = 0; i < total_threads; i++) {
         if (pthread_join(threads[i], NULL) != 0) {
             printf("socket threads join failed.\n");
             exit(EXIT_FAILURE);
@@ -276,16 +296,54 @@ void *createServer(void * arg)
         if ((recv_len = recvfrom(serverSock, buffer, BUFLEN, 0, (struct sockaddr *) &clientAddr, &slen)) == -1) {
             perror("receiving failed\n");
         } else {
-            parsePacket(buffer, recv_len, machine->ip_address);
-       	    /* acknowledge to client */
-            if (sendto(serverSock, buffer, slen, 0, (struct sockaddr *)&clientAddr, slen) < 0) {
-                printf("acknowledge failed.\n");
+            /* parse packet when destination matches*/
+            if (getPacketDestination(buffer) == -1) {
+                //skip if not IP packet
+            } else if (getPacketDestination(buffer) == machine->ip_address) {
+                parsePacket(buffer, recv_len, machine->ip_address);
+                /* acknowledge to client */
+                if (sendto(serverSock, buffer, slen, 0, (struct sockaddr *)&clientAddr, slen) < 0) {
+                    printf("acknowledge failed.\n");
+                }
+            /* forward packet when destination does not match its own address*/
+            } else {
+                /* forward packet*/
+		machine->source_port = clientAddr.sin_port;
+            	createClient(machine);
             }
-        }
+       	}
     }
  
     close(serverSock);
 
+}
+
+long getPacketDestination(const u_char* packet)
+{
+    const struct wlan_header* wlanHeader;
+    const struct ip* ipHeader;
+    char destIP[INET_ADDRSTRLEN];
+    wlanHeader = (struct wlan_header*)packet;
+    if (htons(wlanHeader->protocol) == WLANTYPE_IP) {
+        ipHeader = (struct ip*)(packet + sizeof(struct wlan_header));
+        return ipHeader->ip_dst.s_addr;
+    } else {
+        return -1;
+    }
+}
+
+long getPacketSource(const u_char* packet)
+{
+    const struct wlan_header* wlanHeader;
+    const struct ip* ipHeader;
+    char destIP[INET_ADDRSTRLEN];
+    wlanHeader = (struct wlan_header*)packet;
+    if (htons(wlanHeader->protocol) == WLANTYPE_IP) {
+        ipHeader = (struct ip*)(packet + sizeof(struct wlan_header));
+        return ipHeader->ip_src.s_addr;
+    } else {
+        return -1;
+    }
 }
 
 void parsePacket(const u_char* packet, const int size, const unsigned long machine_ip)
