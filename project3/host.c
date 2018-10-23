@@ -29,11 +29,6 @@ struct host {
     struct host** neighbors;
 };
 
-struct socket {
-    long src_address;
-    struct host* neighbor;
-};
-
 struct wlan_header {
     u_short packet_type;
     u_short addr_type;
@@ -47,7 +42,6 @@ void readConfigFile (char* filename, struct host* machine);
 void *createClient(void * arg);
 void *createServer(void * arg);
 void parsePacket(const u_char* packet, const int size, const unsigned long machine_ip);
-int *createClientSocket(void * arg);
 
 int main(int argc, char **argv) { 
     
@@ -118,10 +112,6 @@ void readConfigFile (char* filename, struct host* machine)
         printf("neighbor info: %s %s %hu\n", buffer, ip, (*neighborptr)->port);
         neighborptr++;
     }
-}
-
-int *createClientSocket(void * arg)
-{
 }
 
 void *createClient(void * arg)
