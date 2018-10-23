@@ -21,9 +21,9 @@
 #define WLANTYPE_IP 0x0800
     
 struct host {
-    short port;
-    long ip_address;
-    long real_ip;
+    unsigned short port;
+    unsigned long ip_address;
+    unsigned long real_ip;
     int total_neighbors;
     char packet_file[BUFLEN];
     struct host** neighbors;
@@ -67,14 +67,19 @@ int main(int argc, char **argv) {
     /* read from config file */
     readConfigFile(argv[1], machine);
 
-    /* create client thread */
-    status = pthread_create(&threads[0], NULL, createClient, machine);
     /* create server thread */
-    status = pthread_create(&threads[1], NULL, createServer, machine);
+    status = pthread_create(&threads[0], NULL, createServer, machine);
+
+    /* create client thread */
+    status = pthread_create(&threads[1], NULL, createClient, machine);
 
     /* join threads */
     status = pthread_join(threads[0], &exit_value);
     status = pthread_join(threads[1], &exit_value);
+    
+    /*clean memory*/
+    free(machine);
+    machine = NULL;
     
     return 0;
 }
@@ -95,7 +100,7 @@ void readConfigFile (char* filename, struct host* machine)
     /*read info for this machine*/
     fscanf(config_file, "%s\n\n%hu\n\n%d\n\n", buffer, &machine->port, &machine->total_neighbors);
     machine->ip_address = inet_addr(buffer);
-    printf("from text file: %s\n", buffer);
+    printf("ip address: %s\n", buffer);
     printf("port number: %hu\n", machine->port);
     
     /* read neighbors info*/
@@ -148,11 +153,10 @@ void *createClient(void * arg)
 
     while ((packet = pcap_next(pp, &header)) != NULL) {
 
-        int i = 0;
-
         /* parse packet to find matching source*/
         ipHeader = (struct ip*)(packet + sizeof(struct wlan_header));
         if (ipHeader->ip_src.s_addr == machine->ip_address) {
+
             /* send to each neighbor */
             for (int i = 0; i < machine->total_neighbors; i++) {
         
@@ -167,14 +171,11 @@ void *createClient(void * arg)
                     MSG_CONFIRM, (const struct sockaddr *) &serverAddr,
                     slen) < 0) {
                     perror("send error\n");
-                } 
+                }
             }
         }
     }
 
-    /*clean memory*/
-    free(machine);
-    machine = NULL;
     close(serverSock);
 }
 
@@ -235,6 +236,7 @@ void parsePacket(const u_char* packet, const int size, const unsigned long machi
     char sourceWLAN[ETH_ALEN * 3];
     char sourceIP[INET_ADDRSTRLEN];
     char destIP[INET_ADDRSTRLEN];
+    char machineIP[INET_ADDRSTRLEN];
     u_char tos;
     u_char *data;
     int i;
@@ -243,12 +245,12 @@ void parsePacket(const u_char* packet, const int size, const unsigned long machi
     wlanHeader = (struct wlan_header*)packet;
     if (htons(wlanHeader->protocol) == WLANTYPE_IP) {
         ipHeader = (struct ip*)(packet + sizeof(struct wlan_header));
+        /* get source and dest ip addresses */
+        inet_ntop(AF_INET, &(ipHeader->ip_dst), destIP, INET_ADDRSTRLEN);
+        inet_ntop(AF_INET, &(ipHeader->ip_src), sourceIP, INET_ADDRSTRLEN);
+        ether_ntoa_r((struct ether_addr *)&(wlanHeader->addr_src), sourceWLAN);
         if (ipHeader->ip_dst.s_addr == machine_ip) {
-            /* get source and dest ip addresses */
-            inet_ntop(AF_INET, &(ipHeader->ip_dst), destIP, INET_ADDRSTRLEN);
-            inet_ntop(AF_INET, &(ipHeader->ip_src), sourceIP, INET_ADDRSTRLEN);
-            ether_ntoa_r((struct ether_addr *)&(wlanHeader->addr_src), sourceWLAN);
-            /* get protocol */
+                       /* get protocol */
             if (ipHeader->ip_p == 6) {
                 strcpy(ip_protocol_str, "TCP");
             } else if (ipHeader->ip_p == 17) {
