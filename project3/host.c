@@ -31,6 +31,7 @@ struct host {
 };
 
 struct socket {
+    int sock_no;
     long src_address;
     struct host* neighbor;
 };
@@ -44,6 +45,9 @@ struct wlan_header {
     u_short protocol; 
 };
 
+struct socket** neighbor_sockets;
+struct socket** nsptr;
+
 void readConfigFile (char* filename, struct host* machine);
 void *createClient(void * arg);
 void *createServer(void * arg);
@@ -51,6 +55,7 @@ void parsePacket(const u_char* packet, const int size, const unsigned long machi
 void *createClientSocket(void * arg);
 long getPacketDestination(const u_char* packet);
 long getPacketSource(const u_char* packet);
+void forwardPacket(const u_char* packet,const int packet_len, const long ip_address, const short src_port);
 
 int main(int argc, char **argv) { 
     
@@ -108,6 +113,8 @@ void readConfigFile (char* filename, struct host* machine)
     printf("port number: %hu\n", machine->port);
     
     /* read neighbors info*/
+    neighbor_sockets = malloc(sizeof(struct socket*)*machine->total_neighbors);
+    nsptr = neighbor_sockets;
     machine->neighbors = malloc(sizeof(struct host*) * machine->total_neighbors); 
     neighborptr = machine->neighbors;
     for (int i = 0; i < machine->total_neighbors; i++) {
@@ -121,7 +128,6 @@ void readConfigFile (char* filename, struct host* machine)
         printf("neighbor info: %s %s %hu\n", buffer, ip, (*neighborptr)->port);
         neighborptr++;
     }
-    machine->source_port = 0;
 }
 
 void *createClientSocket(void * arg)
@@ -146,6 +152,9 @@ void *createClientSocket(void * arg)
         perror("socket failed"); 
         exit(EXIT_FAILURE); 
     }
+    sock->sock_no = serverSock;
+    *nsptr++ = sock;
+    printf("serverSock: %d\tip to: %ld\n", serverSock, machine->ip_address);
 
     memset(&serverAddr, 0, sizeof(serverAddr)); 
  
@@ -196,11 +205,11 @@ void *createClientSocket(void * arg)
     }
 
     /*clean memory*/
-    free(machine);
-    free(sock);
-    machine = NULL;
-    sock = NULL;
-    close(serverSock);
+    //free(machine);
+    //free(sock);
+    //machine = NULL;
+    //sock = NULL;
+    //close(serverSock);
 }
 
 void *createClient(void * arg)
@@ -217,11 +226,7 @@ void *createClient(void * arg)
     /*get info*/
     machine = (struct host *)arg;
 
-    total_threads = machine->total_neighbors;
-    if (machine->source_port != 0) {
-        total_threads--;
-    }
-    threads = malloc(sizeof(pthread_t) * total_threads);
+    threads = malloc(sizeof(pthread_t) * machine->total_neighbors);
 
     if (threads == NULL) {
         printf("out of memory\n");
@@ -229,26 +234,19 @@ void *createClient(void * arg)
     }
     
     /*create sockets for each neighbor*/
-    int thread_idx = 0;
     for (int i = 0; i < machine->total_neighbors; i++) {
         /* do not send back where packets come from */
-        if (machine->source_port == 0 || machine->neighbors[i]->port != machine->source_port) {
-	    struct socket* sock = malloc(sizeof(struct socket));
-            sock->src_address = machine->ip_address;
-            sock->neighbor = machine->neighbors[i];
-            inet_ntop(AF_INET, &(sock->neighbor->ip_address), destIP, INET_ADDRSTRLEN);
-            inet_ntop(AF_INET, &(machine->ip_address), sourceIP, INET_ADDRSTRLEN);
-            printf("%s forwarding packets to %s\n", sourceIP, destIP);
-            if (pthread_create(&threads[thread_idx], NULL, createClientSocket, sock) != 0) {
-                printf("creating socket thread failed.\n");
-                exit(EXIT_FAILURE);
-            }
-            thread_idx++;
+	struct socket* sock = malloc(sizeof(struct socket));
+        sock->src_address = machine->ip_address;
+        sock->neighbor = machine->neighbors[i];
+        if (pthread_create(&threads[i], NULL, createClientSocket, sock) != 0) {
+            printf("creating socket thread failed.\n");
+            exit(EXIT_FAILURE);
         }
     }
 
     /* join threads */
-    for (int i = 0; i < total_threads; i++) {
+    for (int i = 0; i < machine->total_neighbors; i++) {
         if (pthread_join(threads[i], NULL) != 0) {
             printf("socket threads join failed.\n");
             exit(EXIT_FAILURE);
@@ -308,8 +306,9 @@ void *createServer(void * arg)
             /* forward packet when destination does not match its own address*/
             } else {
                 /* forward packet*/
-		machine->source_port = clientAddr.sin_port;
-            	createClient(machine);
+		// machine->source_port = clientAddr.sin_port;
+            	// createClient(machine);
+                forwardPacket(buffer,recv_len, machine->ip_address, clientAddr.sin_port);
             }
        	}
     }
@@ -344,6 +343,11 @@ long getPacketSource(const u_char* packet)
     } else {
         return -1;
     }
+}
+
+
+void forwardPacket(const u_char* packet,const int packet_len, const long ip_address, const short src_port)
+{
 }
 
 void parsePacket(const u_char* packet, const int size, const unsigned long machine_ip)
