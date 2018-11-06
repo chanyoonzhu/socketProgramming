@@ -46,6 +46,9 @@ struct wlan_header {
     u_short protocol; 
 };
 
+struct socket** neighbor_sockets;
+struct socket** nsptr;
+
 void readConfigFile (char* filename, struct host* machine);
 void *createClient(void * arg);
 void *createServer(void * arg);
@@ -146,6 +149,8 @@ void readConfigFile (char* filename, struct host* machine)
     printf("port number: %hu\n", machine->port);
     
     /* read neighbors info*/
+    neighbor_sockets = malloc(sizeof(struct socket*)*machine->total_neighbors);
+    nsptr = neighbor_sockets;
     machine->neighbors = malloc(sizeof(struct host*) * machine->total_neighbors); 
     neighborptr = machine->neighbors;
     for (int i = 0; i < machine->total_neighbors; i++) {
@@ -160,8 +165,6 @@ void readConfigFile (char* filename, struct host* machine)
         neighborptr++;
     }
 }
-
-
 
 void *createClient(void * arg)
 {
@@ -194,6 +197,9 @@ void *createClient(void * arg)
         perror("socket failed"); 
         exit(EXIT_FAILURE); 
     }
+    sock->sock_no = serverSock;
+    *nsptr++ = sock;
+    printf("serverSock: %d\tip to: %ld\n", serverSock, machine->ip_address);
 
     /* sleep before send incase server not set up*/
     sleep(2);
@@ -293,7 +299,6 @@ void *createServer(void * arg)
     close(serverSock);
 
 }
-
 
 void forwardPacket(const unsigned char* packet, const int size, unsigned short source_port, struct host* machine) 
 {
