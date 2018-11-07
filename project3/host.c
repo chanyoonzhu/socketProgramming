@@ -46,14 +46,11 @@ struct wlan_header {
     u_short protocol; 
 };
 
-struct socket** neighbor_sockets;
-struct socket** nsptr;
-
 void readConfigFile (char* filename, struct host* machine);
 void *createClient(void * arg);
 void *createServer(void * arg);
-void parsePacket(const u_char* packet, const int size, struct host* machine, const unsigned short source_port);
-void forwardPacket(const unsigned char* packet, const int size, unsigned short source_port, struct host* machine); 
+void parsePacket(const u_char* packet, const int size, struct host* machine, const unsigned short source_port, int forward_sock);
+void forwardPacket(const unsigned char* packet, const int size, unsigned short source_port, struct host* machine, int forward_sock); 
 int isInFrameQueue(const unsigned char* frame_id, unsigned char** frames, int size);
 
 int main(int argc, char **argv) { 
@@ -74,6 +71,7 @@ int main(int argc, char **argv) {
         exit(EXIT_FAILURE);
     }
 
+    // create forwarding queue
     machine->f_queue = malloc(sizeof(struct frame_queue));
     machine->f_queue->recent_frames = malloc(sizeof(unsigned char*) * DAMPENING_MEM);
     for (int i = 0; i < DAMPENING_MEM; i++) {
@@ -85,6 +83,7 @@ int main(int argc, char **argv) {
     }
     machine->f_queue->current_pos = 0;
     
+    // create parsing queue
     machine->p_queue = malloc(sizeof(struct frame_queue));
     machine->p_queue->recent_frames = malloc(sizeof(unsigned char*) * DAMPENING_MEM);
     for (int i = 0; i < DAMPENING_MEM; i++) {
@@ -149,8 +148,6 @@ void readConfigFile (char* filename, struct host* machine)
     printf("port number: %hu\n", machine->port);
     
     /* read neighbors info*/
-    neighbor_sockets = malloc(sizeof(struct socket*)*machine->total_neighbors);
-    nsptr = neighbor_sockets;
     machine->neighbors = malloc(sizeof(struct host*) * machine->total_neighbors); 
     neighborptr = machine->neighbors;
     for (int i = 0; i < machine->total_neighbors; i++) {
@@ -165,6 +162,8 @@ void readConfigFile (char* filename, struct host* machine)
         neighborptr++;
     }
 }
+
+
 
 void *createClient(void * arg)
 {
@@ -197,49 +196,42 @@ void *createClient(void * arg)
         perror("socket failed"); 
         exit(EXIT_FAILURE); 
     }
-    sock->sock_no = serverSock;
-    *nsptr++ = sock;
-    printf("serverSock: %d\tip to: %ld\n", serverSock, machine->ip_address);
 
     /* sleep before send incase server not set up*/
     sleep(2);
     
-    for (int i = 0; i < 100; i++) {
-    	printf("reading frames.");
-    }
-    printf("\n");
-
     while ((packet = pcap_next(pp, &header)) != NULL) {
-
-        /* parse packet to find matching source*/
+ 
         wlanHeader = (struct wlan_header*)packet;
         ipHeader = (struct ip*)(packet + sizeof(struct wlan_header));
-        /* add frame id for flooding dampening */
+        // add frame id for flooding dampening
         wlanHeader->unused[1] = frame_id & 0xff;
         wlanHeader->unused[0] = frame_id >> 8 & 0xff;
         if (++frame_id == 1 >> 16 - 1) frame_id = 0;
 
+        // send packet only when source ip matches its own ip
         if (ipHeader->ip_src.s_addr == machine->ip_address) {
            
-            /* update frame queue */
+            // add to forward queue
             f_queue = machine->f_queue;
             f_queue->recent_frames[f_queue->current_pos][0] = wlanHeader->unused[0];
             f_queue->recent_frames[f_queue->current_pos][1] = wlanHeader->unused[1];
             
-            //printf("enqueue %02x%02x at %d\n", f_queue->recent_frames[f_queue->current_pos][0] & 0xff,  f_queue->recent_frames[f_queue->current_pos][1] & 0xff, f_queue->current_pos);
             if (++(f_queue->current_pos) == DAMPENING_MEM) {
-                 f_queue->current_pos = 0;
+                // wrapping forward queue if needed 
+                f_queue->current_pos = 0;
             } 
-            /* send to each neighbor */
+            // send to each neighbor 
             for (int i = 0; i < machine->total_neighbors; i++) {
         
                 memset(&serverAddr, 0, sizeof(serverAddr)); 
  
-                /*address*/
+                // address
                 serverAddr.sin_family = AF_INET; 
                 serverAddr.sin_addr.s_addr = machine->neighbors[i]->real_ip; 
                 serverAddr.sin_port = htons(machine->neighbors[i]->port); 
 
+                // send
                 if (sendto(serverSock, packet, header.len,
                     MSG_CONFIRM, (const struct sockaddr *) &serverAddr,
                     slen) < 0) {
@@ -258,49 +250,55 @@ void *createServer(void * arg)
     char packet[BUFLEN];
     struct sockaddr_in serverAddr, clientAddr;
     int serverSock;
+    int forwardSock;
     int recv_len;
     socklen_t slen = sizeof(clientAddr); 
     struct host* machine;
 
-    /*get info*/
+    // get host
     machine = (struct host *)arg;
      
-    /*create socket*/
+    //create server socket
     if ((serverSock=socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1) {
         perror("socket failed\n");
     }
-     
+    //create forward socket
+    if ((forwardSock=socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1) {
+        perror("socket failed\n");
+    }
+ 
     memset(&serverAddr, 0, slen);
     memset(&clientAddr, 0, slen);
     
-    /*addresses*/ 
+    // addresses 
     serverAddr.sin_family = AF_INET;
     serverAddr.sin_port = htons(machine->port);
     serverAddr.sin_addr.s_addr = machine->real_ip;
     
     
-    /*socket binding*/ 
+    // socket binding 
     if( bind(serverSock , (struct sockaddr*)&serverAddr, slen) < 0){
         perror("binding failed\n");
     }
      
-    /*packet transfer*/
+    // keep receiving
     while(1)
     {
-        /*receive packet*/
+        // receive packet
         memset(buffer,'\0', BUFLEN);
         if ((recv_len = recvfrom(serverSock, buffer, BUFLEN, 0, (struct sockaddr *) &clientAddr, &slen)) == -1) {
             perror("receiving failed\n");
         } else {
-            parsePacket(buffer, recv_len, machine, clientAddr.sin_port);
+            // parse packet
+            parsePacket(buffer, recv_len, machine, clientAddr.sin_port, forwardSock);
         }
     }
  
     close(serverSock);
-
+    close(forwardSock);
 }
 
-void forwardPacket(const unsigned char* packet, const int size, unsigned short source_port, struct host* machine) 
+void forwardPacket(const unsigned char* packet, const int size, unsigned short source_port, struct host* machine, int forward_sock) 
 {
     
     struct frame_queue* f_queue; 
@@ -315,50 +313,45 @@ void forwardPacket(const unsigned char* packet, const int size, unsigned short s
     char destIP[INET_ADDRSTRLEN];
     char neighborIP[INET_ADDRSTRLEN];
 
-    /*socket creation*/
-    if ((serverSock = socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) { 
-        perror("socket failed"); 
-        exit(EXIT_FAILURE); 
-    }
+    serverSock = forward_sock;
 
+    // get forward queue
     f_queue = machine->f_queue;
-    /* parse packet to find matching source*/
+
     wlanHeader = (struct wlan_header*)packet;
     ipHeader = (struct ip*)(packet + sizeof(struct wlan_header));
     inet_ntop(AF_INET, &(ipHeader->ip_dst), destIP, INET_ADDRSTRLEN);
     inet_ntop(AF_INET, &(ipHeader->ip_src), sourceIP, INET_ADDRSTRLEN);
-    /* do not forward if forwarded before */
+    // do not forward if already in forward queue
     if (isInFrameQueue(wlanHeader->unused, f_queue->recent_frames, DAMPENING_MEM) == 1) {
-        //printf("forwarded before.\n");
         return;
     }
-    //printf("started forwarding\n.");
-    /* update frame queue */
-    f_queue = machine->f_queue;
+    // update forward queue
     f_queue->recent_frames[f_queue->current_pos][0] = wlanHeader->unused[0];
     f_queue->recent_frames[f_queue->current_pos][1] = wlanHeader->unused[1];
     if (++(f_queue->current_pos) == DAMPENING_MEM) {
          f_queue->current_pos = 0;
     } 
 
-    /* send to each neighbor */
+    // send to each neighbor
     for (int i = 0; i < machine->total_neighbors; i++) {
         
-        /* do not send back where it came from */
+        // do not forward to where it came from 
         if (machine->neighbors[i]->port != source_port) {
+
             memset(&serverAddr, 0, sizeof(serverAddr)); 
  
-            /*address*/
+            // address
             serverAddr.sin_family = AF_INET; 
             serverAddr.sin_addr.s_addr = machine->neighbors[i]->real_ip; 
             serverAddr.sin_port = htons(machine->neighbors[i]->port); 
 
-            /* log */
+            // log 
             inet_ntop(AF_INET, &(machine->neighbors[i]->ip_address), neighborIP, INET_ADDRSTRLEN);
-            printf("forwarding packet id %02x%02x from %s to %s to neighbor %s\n", 
+            printf("forwarding packet id %02x%02x src- %s dest- %s to neighbor %s\n", 
                    wlanHeader->unused[0] & 0xff, wlanHeader->unused[1] & 0xff, sourceIP, destIP, neighborIP);
 
-            // send
+            // forward packet
             if (sendto(serverSock, packet, size,
                 MSG_CONFIRM, (const struct sockaddr *) &serverAddr,
                 slen) < 0) {
@@ -367,12 +360,11 @@ void forwardPacket(const unsigned char* packet, const int size, unsigned short s
         }
     }  
 
-    close(serverSock);
-   
+    // close(serverSock); 
 }
 
 
-void parsePacket(const u_char* packet, const int size, struct host* machine, const unsigned short source_port)
+void parsePacket(const u_char* packet, const int size, struct host* machine, const unsigned short source_port, int forward_sock)
 {
 
     const struct wlan_header* wlanHeader;
@@ -387,35 +379,31 @@ void parsePacket(const u_char* packet, const int size, struct host* machine, con
     u_char *data;
     int i;
 
-    /*get wlan Info*/
+    // get wlan header
     wlanHeader = (struct wlan_header*)packet;
     
-    /* do not parse if parsed before */
+    // do not parse if in parse queue
     p_queue = machine->p_queue;
     if (isInFrameQueue(wlanHeader->unused, p_queue->recent_frames, DAMPENING_MEM) == 1) {
-        printf("parsed before.\n");
         return;
     }
 
     if (htons(wlanHeader->protocol) == WLANTYPE_IP) {
         ipHeader = (struct ip*)(packet + sizeof(struct wlan_header));
-        /* get source and dest ip addresses */
+        // get source and dest ip addresses
         inet_ntop(AF_INET, &(ipHeader->ip_dst), destIP, INET_ADDRSTRLEN);
         inet_ntop(AF_INET, &(ipHeader->ip_src), sourceIP, INET_ADDRSTRLEN);
         ether_ntoa_r((struct ether_addr *)&(wlanHeader->addr_src), sourceWLAN);
         if (ipHeader->ip_dst.s_addr == machine->ip_address) {
             
-            /* update parse queue */
+            // update parse queue 
             p_queue->recent_frames[p_queue->current_pos][0] = wlanHeader->unused[0];
             p_queue->recent_frames[p_queue->current_pos][1] = wlanHeader->unused[1];
-            
-            //printf("enqueue %02x%02x at %d\n", f_queue->recent_frames[f_queue->current_pos][0] & 0xff,  f_queue->recent_frames[f_queue->current_pos][1] & 0xff, f_queue->current_pos);
             if (++(p_queue->current_pos) == DAMPENING_MEM) {
                  p_queue->current_pos = 0;
-            } 
-    /* get protocol */
-            printf("parsing packet %02x%02x from %s to %s\n", 
-                   wlanHeader->unused[0] & 0xff, wlanHeader->unused[1] & 0xff, sourceIP, destIP);
+            }
+ 
+            // get protocol
             if (ipHeader->ip_p == 6) {
                 strcpy(ip_protocol_str, "TCP");
             } else if (ipHeader->ip_p == 17) {
@@ -426,7 +414,7 @@ void parsePacket(const u_char* packet, const int size, struct host* machine, con
                 strcpy(ip_protocol_str, "");
             }
             tos = ipHeader->ip_tos;
-            /* wlan info*/
+            // wlan info
             printf("WLAN:   -----WLAN HEADER-----\n"
                    "WLAN: Packet type: %hu \n"
                    "WLAN: Link-layer address type: %hu\n"
@@ -442,8 +430,8 @@ void parsePacket(const u_char* packet, const int size, struct host* machine, con
                ntohs(wlanHeader->protocol),
                ipHeader->ip_v & 0x0f);
             fflush(stdout);
-            /* ip info */
-            /*printf("IP:   -----IP HEADER-----\nIP:  Version = %d\n"
+            // ip info
+            printf("IP:   -----IP HEADER-----\nIP:  Version = %d\n"
                    "IP:  Header length = %d bytes\n"
                    "IP:  Type of service = 0x%02x\n"
                    "IP:     xxx. .... = %d (precedence)\n"
@@ -479,15 +467,15 @@ void parsePacket(const u_char* packet, const int size, struct host* machine, con
                    ipHeader->ip_p, ip_protocol_str,
                    ntohs(ipHeader->ip_sum),
                    sourceIP, destIP,
-                   ((ipHeader->ip_hl & 0x0F) * 4  == 20? "No" : "Has"));*/
+                   ((ipHeader->ip_hl & 0x0F) * 4  == 20? "No" : "Has"));
             fflush(stdout);
 
-            /*print data*/
+            // print raw
             int i = 0;
             char letters[16];
             for (i = 0; i < size; i++) {
-                /*print line number*/
-                /*if (i%16 == 0) {
+                // print line number
+                if (i%16 == 0) {
                     printf("%03d0  ", i / 16);
                 } 
                 printf("%02x  ", packet[i]);
@@ -511,13 +499,12 @@ void parsePacket(const u_char* packet, const int size, struct host* machine, con
                         k++;
                     }
                     printf("\n");
-                }  */
+                }
             } 
-            //printf("\n");
+            printf("\n");
         } else {
-            
-            //printf("should forward packet %02x%02x from %s to %s\n", wlanHeader->unused[0] & 0xff, wlanHeader->unused[1] & 0xff, sourceIP, destIP);
-            forwardPacket(packet, size, source_port, machine);
+            // forward if not its own IP
+            forwardPacket(packet, size, source_port, machine, forward_sock);
         }
     } else {
         printf("Not IP header\n\n");
@@ -528,8 +515,6 @@ int isInFrameQueue(const unsigned char* frame_id, unsigned char** frames, int si
 {
     int i;
     for (i = 0; i < size; i++) {
-        //printf("testing forwarding queue\n");
-        //printf("%02x%02x == %02x%02x\t", frame_id[0] & 0xff, frame_id[1] & 0xff, frames[i][0] & 0xff, frames[i][1] & 0xff);
         if ((frames[i][0] & 0xff) == (frame_id[0] & 0xff) && (frames[i][1] & 0xff) == (frame_id[1] & 0xff)) {
             return 1;
         }
