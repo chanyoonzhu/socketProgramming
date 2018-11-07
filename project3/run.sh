@@ -5,5 +5,5 @@ echo "Opening $n_hosts hosts"
 
 for ((i = 1; i <= $n_hosts; i++))
 do
-    xterm -hold -e "./host$i inputs/$i.txt inputs/Project2Topo.pcap" &
+    xterm -sl 2000 -hold -e "./host$i inputs/$i.txt inputs/Project2Topo.pcap" &
 done
