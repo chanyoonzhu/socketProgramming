@@ -179,7 +179,7 @@ void *createClient(void * arg)
     socklen_t slen = sizeof(serverAddr); 
     struct wlan_header* wlanHeader;
     const struct ip* ipHeader;
-    unsigned int frame_id = 0;
+    unsigned int frame_id = 1;
 
     /*get info*/
     machine = (struct host *)arg;
