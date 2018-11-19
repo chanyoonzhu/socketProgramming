@@ -26,10 +26,12 @@ struct host {
     unsigned long ip_address;
     unsigned long real_ip;
     int total_neighbors;
+    int total_entries;
     char packet_file[BUFLEN];
     struct host** neighbors;
     struct frame_queue* f_queue; /* forward queue */
     struct frame_queue* p_queue; /* parse queue */
+    struct routing_entry** routing_table;
 };
 
 struct frame_queue {    
@@ -46,14 +48,21 @@ struct wlan_header {
     u_short protocol; 
 };
 
+// routing table
+struct routing_entry {
+    unsigned long dest; // destination ip
+    unsigned long nexthop; // nexthop ip
+};
+
 void readConfigFile (char* filename, struct host* machine);
 void *createClient(void * arg);
 void *createServer(void * arg);
 void parsePacket(const u_char* packet, const int size, struct host* machine, const unsigned short source_port, int forward_sock);
-void forwardPacket(const unsigned char* packet, const int size, unsigned short source_port, struct host* machine, int forward_sock); 
+void forwardPacket(const unsigned char* packet, const int size, unsigned short source_port, unsigned long dest_ip, struct host* machine, int forward_sock); 
 int isInFrameQueue(const unsigned char* frame_id, unsigned char** frames, int size);
+unsigned long find_nexthop(struct host* machine, unsigned long dest_ip);
 
-int main(int argc, char **argv) { 
+int main(int argc, char **argv) {
     
     pthread_t threads[2];
     int status;
@@ -109,7 +118,7 @@ int main(int argc, char **argv) {
 
     /* join threads */
     status = pthread_join(threads[0], &exit_value);
-    //status = pthread_join(threads[1], &exit_value);
+    status = pthread_join(threads[1], &exit_value);
     
     /*clean memory*/
     for (int i = 0; i < DAMPENING_MEM; i++) {
@@ -122,6 +131,14 @@ int main(int argc, char **argv) {
     }
     free(machine->p_queue->recent_frames);
     free(machine->p_queue);
+    for (int i = 0; i < machine->total_entries; i++) {
+	free(machine->routing_table[i]);
+    }
+    for (int i = 0; i < machine->total_neighbors; i++) {
+        free(machine->neighbors[i]);
+    }
+    free(machine->neighbors);
+    free(machine->routing_table);
     free(machine);
     machine = NULL;
     
@@ -131,8 +148,9 @@ int main(int argc, char **argv) {
 void readConfigFile (char* filename, struct host* machine)
 {
     FILE *config_file;
-    char buffer[16];
-    char ip[16];
+    int num_entries;
+    char buffer1[16];
+    char buffer2[16];
     struct host** neighborptr;
 
     // test for file not existing
@@ -142,9 +160,9 @@ void readConfigFile (char* filename, struct host* machine)
     }
 
     /*read info for this machine*/
-    fscanf(config_file, "%s\n\n%hu\n\n%d\n\n", buffer, &machine->port, &machine->total_neighbors);
-    machine->ip_address = inet_addr(buffer);
-    printf("ip address: %s\n", buffer);
+    fscanf(config_file, "%s\n\n%hu\n\n%d\n\n", buffer1, &machine->port, &machine->total_neighbors);
+    machine->ip_address = inet_addr(buffer1);
+    printf("ip address: %s\n", buffer1);
     printf("port number: %hu\n", machine->port);
     
     /* read neighbors info*/
@@ -152,14 +170,29 @@ void readConfigFile (char* filename, struct host* machine)
     neighborptr = machine->neighbors;
     for (int i = 0; i < machine->total_neighbors; i++) {
         *neighborptr = malloc(sizeof(struct host));
-        memset(buffer, 0, sizeof buffer);
-        memset(ip, 0, sizeof ip);
-        fscanf(config_file, "%s %s %hu\n\n", buffer, ip, &(*neighborptr)->port);
-        (*neighborptr)->ip_address = inet_addr(buffer);
-        (*neighborptr)->real_ip = inet_addr(ip);
+        memset(buffer1, 0, sizeof buffer1);
+        memset(buffer2, 0, sizeof buffer2);
+        fscanf(config_file, "%s %s %hu\n\n", buffer1, buffer2, &(*neighborptr)->port);
+        (*neighborptr)->ip_address = inet_addr(buffer1);
+        (*neighborptr)->real_ip = inet_addr(buffer2);
         strcpy((*neighborptr)->packet_file, machine->packet_file);
-        printf("neighbor info: %s %s %hu\n", buffer, ip, (*neighborptr)->port);
+        printf("neighbor info: %s %s %hu\n", buffer1, buffer2, (*neighborptr)->port);
         neighborptr++;
+    }
+
+    // read routing table
+    printf("routing table:\n");
+    fscanf(config_file, "%d\n\n", &num_entries);
+    machine->total_entries = num_entries;
+    machine->routing_table = malloc(sizeof(struct routing_entry*) * num_entries);
+    for (int i = 0; i < num_entries; i++) {
+        machine->routing_table[i] = malloc(sizeof(struct routing_entry));
+        memset(buffer1, 0, sizeof buffer1);
+        memset(buffer2, 0, sizeof buffer2);
+        fscanf(config_file, "%s %s\n\n", buffer1, buffer2);
+        machine->routing_table[i]->dest = inet_addr(buffer1);
+        machine->routing_table[i]->nexthop = inet_addr(buffer2);
+        printf("%s %s\n", buffer1, buffer2);
     }
 }
 
@@ -180,6 +213,7 @@ void *createClient(void * arg)
     struct wlan_header* wlanHeader;
     const struct ip* ipHeader;
     unsigned int frame_id = 1;
+    unsigned long nexthop;
 
     /*get info*/
     machine = (struct host *)arg;
@@ -221,21 +255,30 @@ void *createClient(void * arg)
                 // wrapping forward queue if needed 
                 f_queue->current_pos = 0;
             } 
-            // send to each neighbor 
+
+            // find nexthop
+            if ((nexthop = find_nexthop(machine, ipHeader->ip_dst.s_addr)) == 0) {
+                printf("Missing routing info. Cannot send packet.");
+                return;
+            }
+            // send according to routing table
             for (int i = 0; i < machine->total_neighbors; i++) {
         
-                memset(&serverAddr, 0, sizeof(serverAddr)); 
- 
-                // address
-                serverAddr.sin_family = AF_INET; 
-                serverAddr.sin_addr.s_addr = machine->neighbors[i]->real_ip; 
-                serverAddr.sin_port = htons(machine->neighbors[i]->port); 
+                if (machine->neighbors[i]->ip_address == nexthop) {
 
-                // send
-                if (sendto(serverSock, packet, header.len,
-                    MSG_CONFIRM, (const struct sockaddr *) &serverAddr,
-                    slen) < 0) {
-                    perror("send error\n");
+                    memset(&serverAddr, 0, sizeof(serverAddr)); 
+ 
+                    // address
+                    serverAddr.sin_family = AF_INET; 
+                    serverAddr.sin_addr.s_addr = machine->neighbors[i]->real_ip; 
+                    serverAddr.sin_port = htons(machine->neighbors[i]->port); 
+
+                    // send
+                    if (sendto(serverSock, packet, header.len,
+                        MSG_CONFIRM, (const struct sockaddr *) &serverAddr,
+                        slen) < 0) {
+                        perror("send error\n");
+                    }
                 }
             }
         }
@@ -298,7 +341,7 @@ void *createServer(void * arg)
     close(forwardSock);
 }
 
-void forwardPacket(const unsigned char* packet, const int size, unsigned short source_port, struct host* machine, int forward_sock) 
+void forwardPacket(const unsigned char* packet, const int size, unsigned short source_port, unsigned long dest_ip,struct host* machine, int forward_sock) 
 {
     
     struct frame_queue* f_queue; 
@@ -308,7 +351,7 @@ void forwardPacket(const unsigned char* packet, const int size, unsigned short s
     struct wlan_header* wlanHeader;
     const struct ip* ipHeader;
     unsigned long frame_id;
-    unsigned long ttl;
+    unsigned long nexthop;
     char sourceIP[INET_ADDRSTRLEN];
     char destIP[INET_ADDRSTRLEN];
     char neighborIP[INET_ADDRSTRLEN];
@@ -333,11 +376,18 @@ void forwardPacket(const unsigned char* packet, const int size, unsigned short s
          f_queue->current_pos = 0;
     } 
 
-    // send to each neighbor
+    // forward
+    // find nexthop
+    nexthop = find_nexthop(machine, dest_ip);
+    if (!nexthop) {
+        printf("Missing routing info. Cannot forward packet\n");
+        return;
+    } 
+
     for (int i = 0; i < machine->total_neighbors; i++) {
         
-        // do not forward to where it came from 
-        if (machine->neighbors[i]->port != source_port) {
+        // forward according to routing table
+        if (machine->neighbors[i]->ip_address == nexthop ) {
 
             memset(&serverAddr, 0, sizeof(serverAddr)); 
  
@@ -504,7 +554,7 @@ void parsePacket(const u_char* packet, const int size, struct host* machine, con
             printf("\n");
         } else {
             // forward if not its own IP
-            forwardPacket(packet, size, source_port, machine, forward_sock);
+            forwardPacket(packet, size, source_port, ipHeader->ip_dst.s_addr, machine, forward_sock);
         }
     } else {
         printf("Not IP header\n\n");
@@ -521,4 +571,14 @@ int isInFrameQueue(const unsigned char* frame_id, unsigned char** frames, int si
     }
     return 0;
 
+}
+
+unsigned long find_nexthop(struct host* machine, unsigned long dest_ip)
+{
+    for (int i = 0; i < machine->total_entries; i++) {
+        if (machine->routing_table[i]->dest == dest_ip) {
+            return machine->routing_table[i]->nexthop;
+        }
+    }
+    return 0;
 }
