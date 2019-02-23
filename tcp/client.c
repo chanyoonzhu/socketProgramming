@@ -10,27 +10,25 @@
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <net/if.h>
-#include <netinet/if_ether.h>
-#include <net/ethernet.h>
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
 #include <arpa/inet.h>
-#include <pcap.h>
 
 #define CLIENTPORT     8080 
 #define BUFLEN 1024 
+#define FILENAMELEN 30
+
+int readFilenames(char* file, char** filenames);
 
 int main(int argc, char **argv) { 
     
-    pcap_t *pp;
-    char errbuf[PCAP_ERRBUF_SIZE];
     char buffer[BUFLEN]; 
     const unsigned char *packet;
     struct sockaddr_in serverAddr; 
-    struct pcap_pkthdr header;
     int serverSock;
     socklen_t slen = sizeof(serverAddr);
- 
+    char** filenames;
+    int filecount;
     /*socket creation*/
     if ((serverSock = socket(PF_INET, SOCK_STREAM, 0)) < 0) { 
         perror("socket failed"); 
@@ -55,13 +53,35 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    /*open pcap file*/
+    // read file
+    if ((filecount = readFilenames(argv[1], filenames)) < 0) {
+        perror("can't read file.\n");
+        exit(1);
+    }
+
+    for (int i = 0; i < filecount; i++) {
+        // send filenames
+        if (send(serverSock, "Hi", FILENAMELEN, 0) != FILENAMELEN) {
+            perror("filename sent error\n");
+        } else {
+            // server replys 1. success 0. failure
+            printf("success\n");  
+        }
+    }
+
+    // sends more until finished
+    // recv server ack
+    // acknowledge ack
+
+    /*
+    // open pcap file
     pp = pcap_open_offline(argv[1], errbuf);
     if (pp == NULL) {
         fprintf(stderr, "\npcap_open_offline() failed: %s\n", errbuf);
         return 0;
     }
-
+    
+    
     while ((packet = pcap_next(pp, &header)) != NULL) {
         
         int i = 0;
@@ -74,7 +94,38 @@ int main(int argc, char **argv) {
             printf("packet sent\n");
         } 
     }
-
+    */
     close(serverSock); 
     return 0;
+}
+
+
+int readFilenames(char* file, char** filenames)
+{
+    FILE *fp;
+    int count = 0;
+    char c;
+    char buffer[FILENAMELEN];
+
+    if ((fp = fopen(file, "r")) == NULL) {
+        perror("Can't open file\n");
+        return -1;
+    }
+
+    for (c = getc(fp); c != EOF; c = getc(fp)) {
+        if (c == '\n') {
+            count++;
+        }
+    }
+    // point to file beginning 
+    fseek(fp, 0, SEEK_SET);
+    filenames = malloc(sizeof(char*) * count);      
+    for (int i = 0; i < count; i++) {
+        memset(buffer, 0, sizeof(buffer));
+        fscanf(fp, "%s\n", buffer);
+        filenames[i] = malloc(sizeof(buffer));
+        strcpy(filenames[i], buffer);
+    }
+
+    return count; 
 }
