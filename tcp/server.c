@@ -60,45 +60,69 @@ int main(void)
     }
     
     while(1)
-    {
+    {    
         memset(buffer,'\0', BUFLEN);
         // TODO: timeout
         if ((recv_len = recv(fd, buffer, BUFLEN, 0)) < 0) {
             perror("receiving failed\n");
         } else {
-            if(send(fd, "Success\0", 8, 0) != 8) {
-                perror("success/fail acknowledge failed\n");
-                exit(1);
-            }
-            printf("writing file: %s\n", buffer);
-            if ((fptr = fopen(buffer, "w+")) == NULL) {
-                perror("can't create file\n");
-                exit(1);
-            }
-
-            memset(buffer, '\0', BUFLEN);
-            if ((recv_len = recv(fd, buffer, BUFLEN, 0)) < 0) {
-                perror("receiving data failed\n");
-            }
-            while (strcmp(buffer, "DONE!\n") != 0) {
-                printf("writing data %s\n", buffer);
-                fputs(buffer, fptr);
+            if (strcmp(buffer, "FINISHED!\n") == 0) {
+                printf("%s", buffer);
+                memset(buffer, '\0', BUFLEN);
+                if (send(fd, "THANK YOU CLOSE CONNECTION!\0", BUFLEN, 0) != BUFLEN) {
+                    perror("finish ack not sent\n");
+                } else { 
+                    memset(buffer,'\0', BUFLEN);
+                    if ((recv_len = recv(fd, buffer, BUFLEN, 0)) < 0) {
+                        perror("finish ack not received\n");
+                    } else {
+                        if (strcmp(buffer, "AGREED!\n") == 0) {
+                            printf("%s", buffer);
+                            break;
+                        }
+                    }
+                } 
+            } else if (strcmp(buffer+strlen(buffer)-4, ".txt") == 0) {
+                if(send(fd, "Success\0", 8, 0) != 8) {
+                    perror("success/fail acknowledge failed\n");
+                    exit(1);
+                }
+                printf("writing file: %s\n", buffer);
+                if ((fptr = fopen(buffer, "a")) == NULL) {
+                    perror("can't create file\n");
+                    exit(1);
+                }
+    
                 memset(buffer, '\0', BUFLEN);
                 if ((recv_len = recv(fd, buffer, BUFLEN, 0)) < 0) {
                     perror("receiving data failed\n");
                 }
-            }
-            if ((send(fd, "THANK YOU! FILE CLOSED\0", BUFLEN, 0)) != BUFLEN) {
-                perror("file close acknowledge not sent\n");
+                while (strcmp(buffer, "DONE!\n") != 0) {
+                    printf("writing data %s", buffer);
+                    fputs(buffer, fptr);
+                    memset(buffer, '\0', BUFLEN);
+                    if ((recv_len = recv(fd, buffer, BUFLEN, 0)) < 0) {
+                        perror("receiving data failed\n");
+                    }
+                }
+                if ((send(fd, "THANK YOU! FILE CLOSED\0", BUFLEN, 0)) != BUFLEN) {
+                    perror("file close acknowledge not sent\n");
+                } else {
+                    printf("file close ack sent\n");
+                    if ((recv_len = recv(fd, buffer, BUFLEN, 0)) < 0) {
+                        perror("client ack not received\n");
+                    }
+                } 
+                fclose(fptr);
+                printf("file closed.\n");
             } else {
-                printf("file close ack sent\n");
-            } 
-            fclose(fptr);
-            printf("done writing file\n");
-       }
+                send(fd, "\0", BUFLEN, 0);
+            }
+        }
     }
  
     close(serverSock);
+    printf("server connection closed.\n");
     return 0;
 }
 

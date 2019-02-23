@@ -84,18 +84,40 @@ int main(int argc, char **argv) {
                 memset(buffer, '\0', BUFLEN);
                 if (recv_len = recv(serverSock, buffer, BUFLEN, 0) < 0) {
                     perror("end file acknowledge not received\n");
+                    exit(1);
                 } else {
                     printf("server closed file\n");
+                    if (send(serverSock, "server close file ack\0", BUFLEN, 0) != BUFLEN) {
+                        perror("ack to server filed\n");
+                    }
                 }
             } else {
                 printf("timeout, failed sending filename");
             }
         }
     }
-
-    // sends more until finished
-    // recv server ack
-    // acknowledge ack
+   
+    while (1) {
+        memset(buffer, '\0', BUFLEN);
+        fgets(buffer, BUFLEN, stdin);
+        if (send(serverSock, buffer, BUFLEN, 0) != BUFLEN) {
+            perror("data sent error\n");
+        } else {
+           memset(buffer, '\0', BUFLEN);
+           if ((recv_len = recv(serverSock, buffer, BUFLEN, 0)) < 0) {
+               perror("receiving data failed\n");
+           } else {
+               if (strcmp(buffer, "THANK YOU CLOSE CONNECTION!\0") == 0) {
+                    printf("%s\n", buffer);
+                    if (send(serverSock, "AGREED!\n", BUFLEN, 0) != BUFLEN) {
+                         perror("sending final ack failed\n");
+                    } else {
+                         break;
+                    }
+               }
+           }
+        }
+    }
 
     close(serverSock); 
     return 0;
